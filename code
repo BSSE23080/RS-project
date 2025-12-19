@@ -1,0 +1,98 @@
+num_users = 50
+num_items = 100
+num_samples = 3000
+
+users = np.random.randint(0, num_users, num_samples)
+items = np.random.randint(0, num_items, num_samples)
+
+# Structured preference pattern (signal!)
+labels = (users % 5 == items % 5).astype(int)
+
+# Train / Validation split
+u_train, u_val, i_train, i_val, y_train, y_val = train_test_split(
+    users, items, labels, test_size=0.2, random_state=42
+)
+
+train_ds = RatingsDataset(u_train, i_train, y_train)
+val_ds   = RatingsDataset(u_val, i_val, y_val)
+
+train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
+val_loader   = DataLoader(val_ds, batch_size=64)
+
+
+# -------------------------------
+# 4. Model Setup
+# -------------------------------
+model = NeuralRS(num_users, num_items)
+criterion = nn.BCEWithLogitsLoss()
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+
+# -------------------------------
+# 5. Training Loop (Proper Loss)
+# -------------------------------
+epochs = 21
+
+for epoch in range(epochs):
+    model.train()
+    train_loss = 0.0
+
+    for user, item, label in train_loader:
+        optimizer.zero_grad()
+        logits = model(user, item)
+        loss = criterion(logits, label)
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item()
+
+    train_loss /= len(train_loader)
+
+    # Validation
+    model.eval()
+    val_loss = 0.0
+    with torch.no_grad():
+        for user, item, label in val_loader:
+            logits = model(user, item)
+            loss = criterion(logits, label)
+            val_loss += loss.item()
+
+    val_loss /= len(val_loader)
+
+    print(
+        f"Epoch {epoch+1:02d} | "
+        f"Train Loss: {train_loss:.4f} | "
+        f"Val Loss: {val_loss:.4f}"
+    )
+
+
+# -------------------------------
+# 6. Recommendation Function (Correct)
+# -------------------------------
+def recommend_items(model, user_id, num_items, seen_items, top_k=5):
+    model.eval()
+
+    user_tensor = torch.LongTensor([user_id] * num_items)
+    item_tensor = torch.LongTensor(range(num_items))
+
+    with torch.no_grad():
+        scores = model(user_tensor, item_tensor)
+
+    scores[seen_items] = -1e9  # mask interacted items
+    top_items = torch.topk(scores, top_k).indices.tolist()
+    return top_items
+
+
+# -------------------------------
+# 7. Test Recommendation
+# -------------------------------
+test_user = 3
+seen = set(i_train[u_train == test_user])
+
+recommended = recommend_items(
+    model,
+    test_user,
+    num_items,
+    seen_items=list(seen)
+)
+
+print(f"\nRecommended items for User {test_user}: {recommended}")
